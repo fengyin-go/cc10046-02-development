@@ -23,6 +23,7 @@ from app.services.session_manager import SessionManagerService
 from app.services.export_channel import ExportChannelService
 from app.services.crawl_audit import CrawlAuditService
 from app.services.data_cleanup import DataCleanupService
+from app.services.coverage_acceptance import coverage_service as _coverage
 
 router = APIRouter(prefix="/api/chains", tags=["业务链路"])
 
@@ -150,21 +151,59 @@ def run_auth(payload: dict[str, Any]) -> dict[str, Any]:
 
 @router.post("/delivery")
 def run_delivery(payload: dict[str, Any]) -> dict[str, Any]:
-    """交付链路：结果存储 → 导出 → 审计 → 数据清理。"""
+    """交付链路：覆盖率验收 → 结果存储 → 导出 → 审计 → 数据清理。"""
     batch_id = payload.get("batch_id", "BATCH-DELIVERY-1")
     config_name = payload.get("config_name", "delivery")
     export_format = payload.get("export_format", "csv")
     fields = payload.get("fields", ["id", "title", "count"])
     cleanup_module = payload.get("cleanup_module", "result_store")
+    require_coverage = bool(payload.get("require_coverage", False))
+    sources = payload.get("sources")
+    threshold = payload.get("threshold", 0.9)
+    key_fields = payload.get("key_fields", ["price"])
+    mapping_rules = payload.get("mapping_rules")
+    source_records = payload.get("source_records") or {}
 
-    store_result = _store.domain_store_result(batch_id, config_name, 200, 180)
-    export_result = _export.domain_export(batch_id, export_format, fields)
+    if require_coverage and sources:
+        # 把各来源样本登记进覆盖率验收批次，结果存储只认验收结论。
+        _coverage.domain_open_batch(
+            batch_id,
+            required_sources=sources,
+            threshold=threshold,
+            key_fields=key_fields,
+            mapping_rules=mapping_rules or [],
+        )
+        for source, records in source_records.items():
+            _coverage.domain_submit(
+                batch_id, source, records,
+                mode="replace",
+                mapping_rules=mapping_rules or [],
+                key_fields=key_fields,
+            )
+
+    acceptance = _coverage.domain_deliverable(batch_id) if require_coverage else None
+    row_count = payload.get("row_count", 200)
+    valid_count = payload.get("valid_count", 180)
+    if acceptance is not None:
+        # 已登记验收数据时，以验收口径的有效行数为准。
+        row_count = sum(item.get("sample_rows", 0) for item in acceptance["sources"])
+        valid_count = sum(item.get("valid_rows", 0) for item in acceptance["sources"])
+
+    store_result = _store.domain_store_result(
+        batch_id, config_name, row_count, valid_count,
+        require_coverage=require_coverage,
+    )
+    deliverable = bool(store_result.get("deliverable", True))
+    export_result = None
+    if deliverable:
+        export_result = _export.domain_export(batch_id, export_format, fields)
     audit_result = _audit.domain_audit("export", batch_id, "system")
     cleanup_result = _cleanup.domain_cleanup(f"CLEANUP-{batch_id}", cleanup_module, 30)
 
     return {
         "chain": "delivery",
         "steps": {
+            "coverage": acceptance,
             "store_result": store_result,
             "export": export_result,
             "audit": audit_result,

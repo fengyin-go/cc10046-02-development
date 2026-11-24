@@ -16,7 +16,9 @@ class Store:
         }
 
     def module_names(self) -> list[str]:
-        return sorted(self._tables)
+        # 以 `_` 开头的表是业务服务的内部辅助表（例如覆盖率验收轮次），
+        # 不当作独立业务模块暴露到运营概览里。
+        return sorted(name for name in self._tables if not name.startswith("_"))
 
     def rows(self, module: str) -> list[dict[str, Any]]:
         return self._tables.setdefault(module, [])

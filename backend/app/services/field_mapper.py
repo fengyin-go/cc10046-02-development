@@ -35,3 +35,22 @@ class FieldMapperService(BaseModuleService):
                     value = 0
             result[tgt_field] = value
         return result
+
+    def domain_coverage(
+        self,
+        records: list[dict],
+        mapping_rules: list[dict] | None = None,
+        key_fields: list[str] | None = None,
+        threshold: float = 0.9,
+    ) -> dict:
+        """用映射后的采集记录计算关键字段覆盖率。
+
+        实采到的 0 是有效值；默认取值补出来的 0 不算有效，并计入缺值。
+        """
+        from app.services.coverage_acceptance import coverage_service
+        return coverage_service.domain_map_records(
+            records,
+            mapping_rules=mapping_rules,
+            key_fields=key_fields,
+            threshold=threshold,
+        )["summary"]

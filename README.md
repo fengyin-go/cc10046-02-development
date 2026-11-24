@@ -69,6 +69,46 @@ npm run dev
 | HTML清洗 | `html_cleaner` | 清洗模板 | 模板标识、适用站点、标签过滤 |
 | 增量同步 | `incremental_sync` | 同步水位 | 水位标识、来源配置、增量字段 |
 
+## 覆盖率验收
+
+`/coverage` 页面（后端 `app/services/coverage_acceptance.py`）用**映射后**的采集
+记录计算关键字段覆盖率，按来源独立判定阈值。它决定哪些采集数据可以交付，结果
+存储的 `执行校验` 动作也只认这个结论。
+
+口径约定：
+
+- **有效行**：关键字段实际采到即为有效。价格为 `0` 的实采行有效；映射时用默认
+  值补出的 `0` 不计入有效行，并计入缺值。缺值行数、缺值字段数在任何阈值结果下都
+  会返回，审查员始终能看到实际缺了多少。
+- **分来源阈值**：每个来源单独判断，阈值设为 90% 即 `threshold=90`。合并覆盖率只
+  作参考，不能把未达标来源合并成可交付。批次只有在全部必需来源都达标时才
+  `可交付`，否则返回 `readable_sources`（现在能读的已确认来源）、`blocked_sources`
+  （未达标）和 `pending_sources`（还差哪个来源没提交）。
+- **多次提交**：同一来源 `append` 追加提交，样本量和有效行数按“全部来源行 + 原始
+  有效行”累加；`replace` 重新提交会整体替换该来源累计口径。每一轮都会留下不可变
+  的验收记录，含当时的阈值、结果和交付范围，重新提交后仍可追溯最初的阈值记录。
+
+演示批次 `BATCH-PRICE-2026-11-24`：主站 95/100（通过）、镜像站 1/5（未通过），
+合并 96/105 虽达标但分来源冲突，批次不可交付；镜像站重新提交 5/5 后批次转为可
+交付，验收历史里能同时看到两轮的完整交付范围。
+
+主要接口：
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/coverage/batches` | 验收批次列表 |
+| POST | `/api/coverage/batches` | 登记验收批次（来源、阈值、关键字段） |
+| GET | `/api/coverage/batches/{id}` | 批次当前各来源有效行数与交付结论 |
+| GET | `/api/coverage/batches/{id}/deliverable` | 可交付结果（结果存储的闸门） |
+| GET | `/api/coverage/batches/{id}/rounds` | 完整验收历史，可按来源筛选 |
+| POST | `/api/coverage/batches/{id}/submit` | 提交来源样本（append / replace） |
+| GET | `/api/coverage/records` | 覆盖率验收数据（一次提交一行） |
+| POST | `/api/coverage/map` | 映射记录并返回覆盖率，不落库 |
+| POST | `/api/coverage/compute` | 只算覆盖率汇总 |
+
+交付链路 `POST /api/chains/delivery` 支持 `require_coverage=true`：先按覆盖率验收
+判定，未达标批次落成 `校验未过` 且不生成导出任务。
+
 ## 约定
 
 - 全部模块共享`frontend/src/views/WorkbenchView.vue|tsx`和一套资源路由。
